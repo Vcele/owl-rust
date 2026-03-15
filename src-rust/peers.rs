@@ -182,11 +182,120 @@ pub fn peer_to_string(peer: &Peer) -> String {
     format!("{}: {}", name, peer.election.tree_string())
 }
 
-/// Format all peers as a multiline string
+/// Format all peers as a multiline string (sorted for deterministic output)
 pub fn peers_to_string(state: &PeerState) -> String {
-    state
+    let mut entries: Vec<String> = state
         .peers
         .values()
         .map(|p| format!("{}\n", peer_to_string(p)))
-        .collect()
+        .collect();
+    entries.sort();
+    entries.concat()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(i: u8) -> [u8; 6] {
+        [i; 6]
+    }
+
+    #[test]
+    fn test_init() {
+        let state = PeerState::new();
+        assert_eq!(peers_length(&state), 0);
+    }
+
+    #[test]
+    fn test_add() {
+        let mut state = PeerState::new();
+        let s = peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None);
+        assert_eq!(s, PeersStatus::Ok);
+        assert_eq!(peers_length(&state), 1);
+    }
+
+    #[test]
+    fn test_add_two() {
+        let mut state = PeerState::new();
+        assert_eq!(peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None), PeersStatus::Ok);
+        assert_eq!(peers_length(&state), 1);
+        assert_eq!(peer_add::<fn(&Peer)>(&mut state, addr(1), 0, None), PeersStatus::Ok);
+        assert_eq!(peers_length(&state), 2);
+    }
+
+    #[test]
+    fn test_add_same() {
+        let mut state = PeerState::new();
+        assert_eq!(peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None), PeersStatus::Ok);
+        assert_eq!(peers_length(&state), 1);
+        assert_eq!(peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None), PeersStatus::Updated);
+        assert_eq!(peers_length(&state), 1);
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut state = PeerState::new();
+        peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None);
+        let s = peer_remove::<fn(&Peer)>(&mut state, &addr(0), None);
+        assert_eq!(s, PeersStatus::Ok);
+        assert_eq!(peers_length(&state), 0);
+    }
+
+    #[test]
+    fn test_remove_empty() {
+        let mut state = PeerState::new();
+        let s = peer_remove::<fn(&Peer)>(&mut state, &addr(0), None);
+        assert_eq!(s, PeersStatus::Missing);
+        assert_eq!(peers_length(&state), 0);
+    }
+
+    #[test]
+    fn test_remove_twice() {
+        let mut state = PeerState::new();
+        peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None);
+        peer_remove::<fn(&Peer)>(&mut state, &addr(0), None);
+        let s = peer_remove::<fn(&Peer)>(&mut state, &addr(0), None);
+        assert_eq!(s, PeersStatus::Missing);
+        assert_eq!(peers_length(&state), 0);
+    }
+
+    #[test]
+    fn test_remove_timedout() {
+        let mut state = PeerState::new();
+        let mut now: u64 = 0;
+        peer_add::<fn(&Peer)>(&mut state, addr(0), now, None);
+        // Mark peer as valid directly
+        state.peers.get_mut(&addr(0)).unwrap().is_valid = true;
+        assert_eq!(peers_length(&state), 1);
+
+        // cutoff = now (0): last_update(0) < 0 is false → not removed
+        let mut count = 0usize;
+        peers_remove_old(&mut state, now, |_| count += 1);
+        assert_eq!(peers_length(&state), 1);
+        assert_eq!(count, 0);
+
+        // cutoff = now+1 (1): last_update(0) < 1 is true → removed, callback called
+        now += 1;
+        peers_remove_old(&mut state, now, |p| {
+            count += 1;
+            assert_eq!(p.addr, addr(0));
+        });
+        assert_eq!(peers_length(&state), 0);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_print() {
+        let mut state = PeerState::new();
+        peer_add::<fn(&Peer)>(&mut state, addr(0), 0, None);
+        peer_add::<fn(&Peer)>(&mut state, addr(1), 0, None);
+        let s = peers_to_string(&state);
+        // Output is sorted, so addr(0) comes before addr(1)
+        assert!(s.contains("<UNNAMED>: 0:0:0:0:0:0 (met 60, ctr 0)\n"));
+        assert!(s.contains("<UNNAMED>: 1:1:1:1:1:1 (met 60, ctr 0)\n"));
+        let first_pos = s.find("0:0:0:0:0:0").unwrap();
+        let second_pos = s.find("1:1:1:1:1:1").unwrap();
+        assert!(first_pos < second_pos);
+    }
 }

@@ -81,3 +81,56 @@ impl SyncState {
         self.aw_counter = aw_counter & 0xfffc; // mask last two bits
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ieee80211::ieee80211_tu_to_usec;
+
+    fn test_state(now: u64) -> SyncState {
+        SyncState::new(now)
+    }
+
+    #[test]
+    fn test_next_aw_tu() {
+        let now_init: u64 = 0;
+        let state = test_state(now_init);
+        let eaw_period: u64 = state.presence_mode as u64 * state.aw_period as u64; // 4 * 16 = 64
+
+        let mut now = now_init;
+        for tu in 0u64..4 * eaw_period {
+            while now < ieee80211_tu_to_usec(tu + 1) {
+                let next = state.next_aw_tu(now);
+                let expected = (eaw_period - (tu % eaw_period)) as u16;
+                assert_eq!(next, expected, "at now={} (tu={})", now, tu);
+                now += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn test_current_aw() {
+        let now: u64 = 0;
+
+        for &aw in &[0u16, 1337u16, 0xffffu16] {
+            let mut state = test_state(now);
+            state.aw_counter = aw;
+            let current = state.current_aw(now);
+            assert_eq!(current, aw);
+        }
+    }
+
+    #[test]
+    fn test_current_aw_timedelta() {
+        let state = test_state(0);
+        let mut tu: u64 = 0;
+
+        for aw in 0u16..0xffff {
+            while tu < (aw as u64 + 1) * state.aw_period as u64 {
+                let current = state.current_aw(ieee80211_tu_to_usec(tu));
+                assert_eq!(current, aw, "at tu={}", tu);
+                tu += 1;
+            }
+        }
+    }
+}

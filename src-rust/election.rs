@@ -78,8 +78,8 @@ impl ElectionState {
                 );
                 continue; // reject: tree would get too large
             }
-            if peer_state.is_sync_master(&self.self_addr) {
-                continue; // reject: cycle detection
+            if peer_state.master_addr == self.self_addr {
+                continue; // reject: cycle detection (peer claims us as their master)
             }
 
             // Compare peer's master metric to current best
@@ -157,10 +157,10 @@ impl ElectionState {
     }
 }
 
-/// Format a MAC address as a colon-separated hex string
+/// Format a MAC address as a colon-separated hex string (no zero-padding, matching C ether_ntoa)
 pub fn format_addr(addr: &[u8; 6]) -> String {
     format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
         addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
     )
 }
@@ -168,4 +168,121 @@ pub fn format_addr(addr: &[u8; 6]) -> String {
 /// Compare two MAC addresses (lexicographic)
 pub fn compare_ether_addr(a: &[u8; 6], b: &[u8; 6]) -> std::cmp::Ordering {
     a.cmp(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::peers::{PeerState, Peer};
+
+    fn addr(i: u8) -> [u8; 6] {
+        [i; 6]
+    }
+
+    fn add_valid_peer(state: &mut PeerState, a: [u8; 6]) {
+        let peer = state.peers.entry(a).or_insert_with(|| Peer::new(a));
+        peer.is_valid = true;
+    }
+
+    #[test]
+    fn test_init() {
+        let a0 = addr(0);
+        let s = ElectionState::new(a0);
+        assert_eq!(s.self_counter, AWDL_ELECTION_COUNTER_INIT);
+        assert_eq!(s.self_metric, AWDL_ELECTION_METRIC_INIT);
+        assert_eq!(s.master_counter, AWDL_ELECTION_COUNTER_INIT);
+        assert_eq!(s.master_metric, AWDL_ELECTION_METRIC_INIT);
+        assert_eq!(s.height, 0);
+        assert_eq!(s.self_addr, a0);
+        assert_eq!(s.master_addr, a0);
+        assert_eq!(s.sync_addr, a0);
+    }
+
+    #[test]
+    fn test_elect_simple() {
+        let a0 = addr(0);
+        let a1 = addr(1);
+        let mut s = ElectionState::new(a0);
+        let mut p = PeerState::new();
+        add_valid_peer(&mut p, a1);
+        s.run(&p);
+        assert_eq!(s.master_addr, a1);
+    }
+
+    #[test]
+    fn test_elect_simple_invalid() {
+        let a0 = addr(0);
+        let a1 = addr(1);
+        let mut s = ElectionState::new(a0);
+        let mut p = PeerState::new();
+        // peer added but NOT marked valid
+        p.peers.entry(a1).or_insert_with(|| Peer::new(a1));
+        s.run(&p);
+        assert_eq!(s.master_addr, a0);
+    }
+
+    #[test]
+    fn test_counter_metric() {
+        let a0 = addr(0);
+        let a1 = addr(1);
+        let mut s = ElectionState::new(a0);
+        let mut p = PeerState::new();
+        add_valid_peer(&mut p, a1);
+
+        s.run(&p);
+        assert_eq!(s.master_addr, a1); // a1 higher than a0
+
+        p.peers.get_mut(&a1).unwrap().election.master_metric = 1000;
+        s.run(&p);
+        assert_eq!(s.master_addr, a1); // peer metric 1000 > self 60
+
+        s.self_metric = 1000;
+        s.run(&p);
+        assert_eq!(s.master_addr, a1); // same metric, a1 > a0 by address
+
+        s.self_metric = 1001;
+        s.run(&p);
+        assert_eq!(s.master_addr, a0); // self metric 1001 > peer 1000
+
+        p.peers.get_mut(&a1).unwrap().election.master_counter = 1;
+        s.run(&p);
+        assert_eq!(s.master_addr, a1); // peer counter 1 > self counter 0
+
+        s.self_counter = 1;
+        s.run(&p);
+        assert_eq!(s.master_addr, a0); // same counter, self metric 1001 > peer 1000
+    }
+
+    #[test]
+    fn test_elect_cycle() {
+        let a0 = addr(0);
+        let a1 = addr(1);
+        let mut s = ElectionState::new(a0);
+        let mut p = PeerState::new();
+        add_valid_peer(&mut p, a1);
+        {
+            let peer = p.peers.get_mut(&a1).unwrap();
+            peer.election.master_metric = 1000;
+            peer.election.self_metric = 1000;
+            peer.election.height = 1;
+            peer.election.master_addr = a0; // peer claims a0 (self) as master → cycle
+        }
+        s.run(&p);
+        assert_eq!(s.master_addr, a0); // cycle detected, self remains master
+    }
+
+    #[test]
+    fn test_format_addr_zero() {
+        assert_eq!(format_addr(&[0; 6]), "0:0:0:0:0:0");
+    }
+
+    #[test]
+    fn test_format_addr_ones() {
+        assert_eq!(format_addr(&[1; 6]), "1:1:1:1:1:1");
+    }
+
+    #[test]
+    fn test_format_addr_full() {
+        assert_eq!(format_addr(&[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]), "aa:bb:cc:dd:ee:ff");
+    }
 }

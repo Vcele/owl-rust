@@ -221,3 +221,141 @@ impl Buf {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Buf::take ---
+
+    #[test]
+    fn test_buf_take() {
+        let mut frame = Buf::new(2);
+        frame.write_u8(0, 4).unwrap();
+        frame.write_u8(1, 2).unwrap();
+        frame.take(1).unwrap();
+        assert_eq!(frame.len(), 1);
+        assert_eq!(frame.read_u8(0).unwrap(), 4);
+    }
+
+    #[test]
+    fn test_buf_take_oob() {
+        let mut frame = Buf::new(1);
+        assert!(frame.take(frame.len() + 1).is_err());
+        assert_eq!(frame.len(), 1);
+    }
+
+    // --- Buf::strip ---
+
+    #[test]
+    fn test_buf_strip() {
+        let mut frame = Buf::new(2);
+        frame.write_u8(0, 4).unwrap();
+        frame.write_u8(1, 2).unwrap();
+        frame.strip(1).unwrap();
+        assert_eq!(frame.len(), 1);
+        assert_eq!(frame.read_u8(0).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_buf_strip_oob() {
+        let mut frame = Buf::new(1);
+        assert!(frame.strip(frame.len() + 1).is_err());
+        assert_eq!(frame.len(), 1);
+    }
+
+    // --- read_u8 ---
+
+    #[test]
+    fn test_read_u8_valid() {
+        let frame = Buf::new(1);
+        assert!(frame.read_u8(0).is_ok());
+    }
+
+    #[test]
+    fn test_read_u8_oob() {
+        let frame = Buf::new(1);
+        assert!(frame.read_u8(1).is_err());
+    }
+
+    // --- read/write round-trips ---
+
+    #[test]
+    fn test_read_write_u8() {
+        let mut frame = Buf::new(1);
+        frame.write_u8(0, 0xab).unwrap();
+        assert_eq!(frame.read_u8(0).unwrap(), 0xab);
+    }
+
+    #[test]
+    fn test_read_write_le16() {
+        let mut frame = Buf::new(2);
+        frame.write_le16(0, 0x1234).unwrap();
+        assert_eq!(frame.read_le16(0).unwrap(), 0x1234);
+        // also verify byte order
+        assert_eq!(frame.data()[0], 0x34);
+        assert_eq!(frame.data()[1], 0x12);
+    }
+
+    #[test]
+    fn test_read_write_be16() {
+        let mut frame = Buf::new(2);
+        frame.write_be16(0, 0x1234).unwrap();
+        assert_eq!(frame.read_be16(0).unwrap(), 0x1234);
+        // verify big-endian byte order
+        assert_eq!(frame.data()[0], 0x12);
+        assert_eq!(frame.data()[1], 0x34);
+    }
+
+    #[test]
+    fn test_read_write_le32() {
+        let mut frame = Buf::new(4);
+        frame.write_le32(0, 0xdeadbeef).unwrap();
+        assert_eq!(frame.read_le32(0).unwrap(), 0xdeadbeef);
+    }
+
+    #[test]
+    fn test_read_write_be32() {
+        let mut frame = Buf::new(4);
+        frame.write_be32(0, 0xdeadbeef).unwrap();
+        assert_eq!(frame.read_be32(0).unwrap(), 0xdeadbeef);
+        assert_eq!(frame.data()[0], 0xde);
+    }
+
+    #[test]
+    fn test_read_write_ether_addr() {
+        let mut frame = Buf::new(6);
+        let addr = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        frame.write_ether_addr(0, &addr).unwrap();
+        assert_eq!(frame.read_ether_addr(0).unwrap(), addr);
+    }
+
+    #[test]
+    fn test_read_le16_oob() {
+        let frame = Buf::new(2);
+        assert!(frame.read_le16(1).is_err());
+        assert!(frame.read_le16(0).is_ok());
+    }
+
+    #[test]
+    fn test_read_bytes() {
+        let mut frame = Buf::new(4);
+        frame.write_bytes(0, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(frame.read_bytes(0, 4).unwrap(), &[1, 2, 3, 4]);
+        assert_eq!(frame.read_bytes(2, 2).unwrap(), &[3, 4]);
+        assert!(frame.read_bytes(3, 2).is_err());
+    }
+
+    #[test]
+    fn test_read_tlv() {
+        // type=0x01, length=3 (LE16), value=[0xaa, 0xbb, 0xcc]
+        let mut frame = Buf::new(6);
+        frame.write_u8(0, 0x01).unwrap();         // type
+        frame.write_le16(1, 3).unwrap();           // length
+        frame.write_bytes(3, &[0xaa, 0xbb, 0xcc]).unwrap(); // value
+        let (t, v, next) = frame.read_tlv(0).unwrap();
+        assert_eq!(t, 0x01);
+        assert_eq!(v, &[0xaa, 0xbb, 0xcc]);
+        assert_eq!(next, 6);
+    }
+}
