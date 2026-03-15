@@ -1,0 +1,18 @@
+[package]
+name = "owl"
+version = "0.1.0"
+edition = "2021"
+description = "Open Wireless Link (OWL) - An open implementation of Apple Wireless Direct Link (AWDL)"
+license = "GPL-3.0"
+
+[lib]
+name = "awdl"
+path = "src-rust/lib.rs"
+
+[[bin]]
+name = "owl"
+path = "src-rust/main.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
