@@ -5,3 +5,6 @@ cmake-build-release/
 
 # Build files
 build/
+
+# Rust build artifacts
+target/
